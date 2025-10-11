@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QFileDialog,
     QMessageBox,
+    QListWidget,
 )
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtCore import Qt, QThread, Signal
@@ -159,6 +160,8 @@ class MusicPlayer(QMainWindow):
         self.init_gesture_thread()
         # 记录上一次处理的手势，避免重复触发
         self.last_handled_gesture = None
+        # 自动加载音乐
+        self.auto_load_music()
 
     def init_ui(self):
         self.setWindowTitle("MediaPipe手势控制音乐播放器")
@@ -187,9 +190,15 @@ class MusicPlayer(QMainWindow):
         self.gesture_label = QLabel("手势识别结果：等待识别...")
         layout.addWidget(self.gesture_label)
 
+        # 添加音乐列表
+        self.music_list_widget = QListWidget()
+        self.music_list_widget.itemClicked.connect(self.select_music)
+        layout.addWidget(QLabel("音乐列表:"))
+        layout.addWidget(self.music_list_widget)
+
         control_layout = QHBoxLayout()
-        self.load_btn = QPushButton("加载音乐")
-        self.load_btn.clicked.connect(self.load_music)
+        self.load_btn = QPushButton("加载音乐文件夹")
+        self.load_btn.clicked.connect(self.load_music_folder)
 
         self.play_btn = QPushButton("播放")
         self.play_btn.clicked.connect(self.play_music)
@@ -216,26 +225,82 @@ class MusicPlayer(QMainWindow):
 
         self.current_music = ""
         self.is_playing = False
+        self.music_files = []
+        self.current_index = -1
 
-    def load_music(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择音乐文件", "", "音频文件 (*.mp3 *.wav *.ogg)"
-        )
+    def auto_load_music(self):
+        """自动从默认音乐文件夹加载音乐"""
+        # 设置默认音乐文件夹路径（您可以根据需要修改）
+        default_music_folders = [
+            # os.path.expanduser("~/Music"),
+            # os.path.expanduser("~/Downloads"),
+            "music",  # 当前目录下的music文件夹
+        ]
 
-        if file_path and os.path.exists(file_path):
-            self.current_music = file_path
+        for folder in default_music_folders:
+            if os.path.exists(folder):
+                self.load_music_from_folder(folder)
+                if self.music_files:
+                    break
+
+        if not self.music_files:
+            self.status_label.setText("系统状态: 未找到音乐文件，请手动加载")
+        else:
             self.status_label.setText(
-                f"系统状态: 已加载音乐: {os.path.basename(file_path)}"
+                f"系统状态: 已自动加载 {len(self.music_files)} 首音乐"
             )
+
+    def load_music_folder(self):
+        folder_path = QFileDialog.getExistingDirectory(self, "选择音乐文件夹")
+        if folder_path:
+            self.load_music_from_folder(folder_path)
+
+    def load_music_from_folder(self, folder_path):
+        """从指定文件夹加载音乐文件"""
+        supported_formats = (".mp3", ".wav", ".ogg", ".flac", ".m4a")
+        music_files = []
+
+        for root, dirs, files in os.walk(folder_path):
+            for file in files:
+                if file.lower().endswith(supported_formats):
+                    music_files.append(os.path.join(root, file))
+
+        if music_files:
+            self.music_files = music_files
+            self.update_music_list()
+            self.current_index = 0
             self.play_btn.setEnabled(True)
-        elif file_path:
-            self.status_label.setText("系统状态: 所选文件不存在")
-            QMessageBox.warning(self, "文件错误", "所选文件不存在或无法访问")
+            self.status_label.setText(f"系统状态: 已加载 {len(music_files)} 首音乐")
+        else:
+            self.status_label.setText(f"系统状态: 在 {folder_path} 中未找到音乐文件")
+
+    def update_music_list(self):
+        """更新音乐列表显示"""
+        self.music_list_widget.clear()
+        for music_file in self.music_files:
+            self.music_list_widget.addItem(os.path.basename(music_file))
+
+    def select_music(self, item):
+        """从列表中选择音乐"""
+        index = self.music_list_widget.row(item)
+        if 0 <= index < len(self.music_files):
+            self.current_index = index
+            self.current_music = self.music_files[index]
+            self.status_label.setText(
+                f"系统状态: 已选择: {os.path.basename(self.current_music)}"
+            )
+            if self.is_playing:
+                self.play_music()  # 如果正在播放，立即切换到新选择的音乐
 
     def play_music(self):
-        if not self.current_music:
+        if not self.music_files:
             QMessageBox.information(self, "提示", "请先加载音乐文件")
             return
+
+        # 如果没有当前选中的音乐，选择第一首
+        if self.current_index == -1 and self.music_files:
+            self.current_index = 0
+            self.current_music = self.music_files[0]
 
         try:
             pygame.mixer.music.load(self.current_music)
@@ -245,12 +310,14 @@ class MusicPlayer(QMainWindow):
             self.status_label.setText(
                 f"系统状态: 正在播放: {os.path.basename(self.current_music)}"
             )
+            # 高亮显示当前播放的音乐
+            self.music_list_widget.setCurrentRow(self.current_index)
         except pygame.error as e:
             self.status_label.setText(f"系统状态: 播放失败: {str(e)}")
             QMessageBox.warning(self, "播放错误", f"无法播放音乐: {str(e)}")
 
     def pause_music(self):
-        if not self.current_music:
+        if not self.music_files:
             return
 
         if self.is_playing:
@@ -269,8 +336,22 @@ class MusicPlayer(QMainWindow):
             )
 
     def next_music(self):
-        self.pause_music()
-        self.play_music()
+        if not self.music_files:
+            return
+
+        if self.current_index < len(self.music_files) - 1:
+            self.current_index += 1
+        else:
+            self.current_index = 0  # 循环播放
+
+        self.current_music = self.music_files[self.current_index]
+        if self.is_playing:
+            self.play_music()
+        else:
+            self.status_label.setText(
+                f"系统状态: 已选择下一首: {os.path.basename(self.current_music)}"
+            )
+            self.music_list_widget.setCurrentRow(self.current_index)
 
     def init_gesture_thread(self):
         self.gesture_thread = GestureRecognitionThread()
