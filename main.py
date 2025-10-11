@@ -97,6 +97,16 @@ class GestureRecognitionThread(QThread):
                     processed_frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS
                 )
                 gesture = self.recognize_gesture(hand_landmarks.landmark)
+                # 可视化手势名称（调试用）
+                cv2.putText(
+                    processed_frame,
+                    gesture or "未知",
+                    (20, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 255, 0),
+                    2,
+                )
                 return processed_frame, gesture
 
         return processed_frame, None
@@ -114,29 +124,31 @@ class GestureRecognitionThread(QThread):
         ring_pip = landmarks[14].y
         pinky_pip = landmarks[18].y
 
-        thumb_up = thumb_tip.y < thumb_ip - 0.02
-        index_up = index_tip.y < index_pip - 0.02
-        middle_up = middle_tip.y < middle_pip - 0.02
-        ring_up = ring_tip.y < ring_pip - 0.02
-        pinky_up = pinky_tip.y < pinky_pip - 0.02
+        # 手指伸直判断（阈值调整为0.015，减少误判）
+        thumb_up = thumb_tip.y < thumb_ip - 0.015
+        index_up = index_tip.y < index_pip - 0.015
+        middle_up = middle_tip.y < middle_pip - 0.015
+        ring_up = ring_tip.y < ring_pip - 0.015
+        pinky_up = pinky_tip.y < pinky_pip - 0.015
 
-        if (
-            not thumb_up
-            and not index_up
-            and not middle_up
-            and not ring_up
-            and not pinky_up
-        ):
+        # 手指弯曲判断
+        thumb_bend = not thumb_up
+        index_bend = not index_up
+        middle_bend = not middle_up
+        ring_bend = not ring_up
+        pinky_bend = not pinky_up
+
+        # 拳头：所有手指弯曲
+        if thumb_bend and index_bend and middle_bend and ring_bend and pinky_bend:
             return "拳头"
 
+        # 掌心：所有手指伸直
         if thumb_up and index_up and middle_up and ring_up and pinky_up:
             return "掌心"
 
-        thumb_index_dist = np.sqrt(
-            (thumb_tip.x - index_tip.x) ** 2 + (thumb_tip.y - index_tip.y) ** 2
-        )
-        if thumb_index_dist < 0.05 and not middle_up and not ring_up and not pinky_up:
-            return "OK 手势"
+        # V字手势：食指、中指伸直，其他弯曲
+        if index_up and middle_up and thumb_bend and ring_bend and pinky_bend:
+            return "V字手势"
 
         return None
 
@@ -392,15 +404,15 @@ class MusicPlayer(QMainWindow):
             return  # 忽略重复手势
 
         # 手势与操作映射
-        if gesture == "拳头" and not self.is_playing:
-            self.play_music()
-            self.last_handled_gesture = gesture
+        if gesture == "拳头":
+            if not self.is_playing:
+                self.play_music()  # 拳头手势：继续播放（若暂停）
         elif gesture == "掌心":
-            self.pause_music()
-            self.last_handled_gesture = gesture
-        elif gesture == "OK 手势":
-            self.next_music()
-            self.last_handled_gesture = gesture
+            self.pause_music()  # 掌心手势：暂停
+        elif gesture == "V字手势":
+            self.next_music()  # V字手势：下一首
+
+        self.last_handled_gesture = gesture
 
     def update_status(self, message):
         """更新系统状态显示"""
