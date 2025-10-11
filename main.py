@@ -40,9 +40,8 @@ class GestureRecognitionThread(QThread):
         )
         self.prev_gesture = None
         self.gesture_count = 0
-        # 增加手势冷却机制
-        self.gesture_cooldown = 0  # 冷却时间计数
-        self.cooldown_frames = 15  # 15帧冷却（约0.75秒）
+        self.gesture_cooldown = 0
+        self.cooldown_frames = 15
         print("手势识别线程已初始化")
 
     def run(self):
@@ -59,21 +58,20 @@ class GestureRecognitionThread(QThread):
                     self.error_signal.emit("无法获取摄像头帧数据")
                     break
 
-                # 冷却机制：冷却期间不处理手势
                 if self.gesture_cooldown > 0:
                     self.gesture_cooldown -= 1
 
                 processed_frame, gesture = self.process_and_recognize(frame)
                 self.image_signal.emit(frame, processed_frame)
 
-                if gesture and self.gesture_cooldown == 0:  # 冷却结束才处理
+                if gesture and self.gesture_cooldown == 0:
                     if gesture == self.prev_gesture:
                         self.gesture_count += 1
-                        if self.gesture_count >= 3:  # 连续3帧识别到才确认
+                        if self.gesture_count >= 3:
                             self.gesture_signal.emit(gesture)
                             self.prev_gesture = None
                             self.gesture_count = 0
-                            self.gesture_cooldown = self.cooldown_frames  # 触发冷却
+                            self.gesture_cooldown = self.cooldown_frames
                     else:
                         self.prev_gesture = gesture
                         self.gesture_count = 1
@@ -104,7 +102,6 @@ class GestureRecognitionThread(QThread):
         return processed_frame, None
 
     def recognize_gesture(self, landmarks):
-        # 关键点定义
         thumb_tip = landmarks[4]
         index_tip = landmarks[8]
         middle_tip = landmarks[12]
@@ -117,14 +114,12 @@ class GestureRecognitionThread(QThread):
         ring_pip = landmarks[14].y
         pinky_pip = landmarks[18].y
 
-        # 判断手指是否伸直（增加阈值，减少误判）
         thumb_up = thumb_tip.y < thumb_ip - 0.02
         index_up = index_tip.y < index_pip - 0.02
         middle_up = middle_tip.y < middle_pip - 0.02
         ring_up = ring_tip.y < ring_pip - 0.02
         pinky_up = pinky_tip.y < pinky_pip - 0.02
 
-        # 拳头：所有手指弯曲
         if (
             not thumb_up
             and not index_up
@@ -134,11 +129,9 @@ class GestureRecognitionThread(QThread):
         ):
             return "拳头"
 
-        # 掌心：所有手指伸直
         if thumb_up and index_up and middle_up and ring_up and pinky_up:
             return "掌心"
 
-        # OK手势：拇指食指靠近，其他弯曲
         thumb_index_dist = np.sqrt(
             (thumb_tip.x - index_tip.x) ** 2 + (thumb_tip.y - index_tip.y) ** 2
         )
@@ -158,10 +151,8 @@ class MusicPlayer(QMainWindow):
         self.init_ui()
         self.init_music()
         self.init_gesture_thread()
-        # 记录上一次处理的手势，避免重复触发
         self.last_handled_gesture = None
-        # 自动加载音乐
-        self.auto_load_music()
+        self.auto_load_music()  # 启动时自动加载音乐
 
     def init_ui(self):
         self.setWindowTitle("MediaPipe手势控制音乐播放器")
@@ -171,6 +162,7 @@ class MusicPlayer(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
+        # 视频显示区域
         video_layout = QHBoxLayout()
         self.original_video = QLabel("原始视频")
         self.original_video.setAlignment(Qt.AlignCenter)
@@ -181,34 +173,30 @@ class MusicPlayer(QMainWindow):
         self.processed_video.setAlignment(Qt.AlignCenter)
         self.processed_video.setMinimumSize(400, 400)
         video_layout.addWidget(self.processed_video)
-
         layout.addLayout(video_layout)
 
+        # 状态与手势显示
         self.status_label = QLabel("系统状态: 初始化中...")
         layout.addWidget(self.status_label)
-
         self.gesture_label = QLabel("手势识别结果：等待识别...")
         layout.addWidget(self.gesture_label)
 
-        # 添加音乐列表
+        # 音乐列表
         self.music_list_widget = QListWidget()
         self.music_list_widget.itemClicked.connect(self.select_music)
         layout.addWidget(QLabel("音乐列表:"))
         layout.addWidget(self.music_list_widget)
 
+        # 控制按钮
         control_layout = QHBoxLayout()
         self.load_btn = QPushButton("加载音乐文件夹")
         self.load_btn.clicked.connect(self.load_music_folder)
-
         self.play_btn = QPushButton("播放")
         self.play_btn.clicked.connect(self.play_music)
-
         self.pause_btn = QPushButton("暂停")
         self.pause_btn.clicked.connect(self.pause_music)
-
         self.next_btn = QPushButton("下一首")
         self.next_btn.clicked.connect(self.next_music)
-
         control_layout.addWidget(self.load_btn)
         control_layout.addWidget(self.play_btn)
         control_layout.addWidget(self.pause_btn)
@@ -227,17 +215,17 @@ class MusicPlayer(QMainWindow):
         self.is_playing = False
         self.music_files = []
         self.current_index = -1
+        self.paused_position = 0  # 记录暂停时的播放位置（单位：秒）
 
     def auto_load_music(self):
-        """自动从默认音乐文件夹加载音乐"""
-        # 设置默认音乐文件夹路径（您可以根据需要修改）
-        default_music_folders = [
-            # os.path.expanduser("~/Music"),
-            # os.path.expanduser("~/Downloads"),
-            "music",  # 当前目录下的music文件夹
+        """启动时自动从默认路径加载音乐"""
+        default_folders = [
+            "music",  # 当前目录下的music文件夹（可修改为常用音乐路径）
+            os.path.expanduser("~/Music"),  # 用户音乐文件夹（macOS/Linux）
+            os.path.expanduser("~/Downloads"),  # 下载文件夹
         ]
 
-        for folder in default_music_folders:
+        for folder in default_folders:
             if os.path.exists(folder):
                 self.load_music_from_folder(folder)
                 if self.music_files:
@@ -251,16 +239,17 @@ class MusicPlayer(QMainWindow):
             )
 
     def load_music_folder(self):
+        """手动选择文件夹加载音乐"""
         folder_path = QFileDialog.getExistingDirectory(self, "选择音乐文件夹")
         if folder_path:
             self.load_music_from_folder(folder_path)
 
     def load_music_from_folder(self, folder_path):
-        """从指定文件夹加载音乐文件"""
+        """从指定文件夹扫描并加载音乐文件"""
         supported_formats = (".mp3", ".wav", ".ogg", ".flac", ".m4a")
         music_files = []
 
-        for root, dirs, files in os.walk(folder_path):
+        for root, _, files in os.walk(folder_path):
             for file in files:
                 if file.lower().endswith(supported_formats):
                     music_files.append(os.path.join(root, file))
@@ -268,59 +257,66 @@ class MusicPlayer(QMainWindow):
         if music_files:
             self.music_files = music_files
             self.update_music_list()
-            self.current_index = 0
+            self.current_index = 0  # 自动选中第一首
             self.play_btn.setEnabled(True)
             self.status_label.setText(f"系统状态: 已加载 {len(music_files)} 首音乐")
         else:
             self.status_label.setText(f"系统状态: 在 {folder_path} 中未找到音乐文件")
 
     def update_music_list(self):
-        """更新音乐列表显示"""
+        """更新音乐列表UI显示"""
         self.music_list_widget.clear()
-        for music_file in self.music_files:
-            self.music_list_widget.addItem(os.path.basename(music_file))
+        for file in self.music_files:
+            self.music_list_widget.addItem(os.path.basename(file))
 
     def select_music(self, item):
-        """从列表中选择音乐"""
+        """从列表中选择音乐并切换"""
         index = self.music_list_widget.row(item)
         if 0 <= index < len(self.music_files):
             self.current_index = index
             self.current_music = self.music_files[index]
+            self.paused_position = 0  # 切换音乐时重置暂停位置
             self.status_label.setText(
                 f"系统状态: 已选择: {os.path.basename(self.current_music)}"
             )
             if self.is_playing:
-                self.play_music()  # 如果正在播放，立即切换到新选择的音乐
+                self.play_music()  # 若正在播放，立即切换
 
     def play_music(self):
+        """播放/继续播放音乐（支持从暂停位置恢复）"""
         if not self.music_files:
             QMessageBox.information(self, "提示", "请先加载音乐文件")
             return
 
-        # 如果没有当前选中的音乐，选择第一首
+        # 自动选中第一首（若未选择）
         if self.current_index == -1 and self.music_files:
             self.current_index = 0
             self.current_music = self.music_files[0]
 
         try:
             pygame.mixer.music.load(self.current_music)
-            pygame.mixer.music.play()
+            if self.paused_position > 0:  # 从暂停位置继续
+                pygame.mixer.music.play(start=self.paused_position)
+            else:  # 从头播放
+                pygame.mixer.music.play()
             self.is_playing = True
             self.play_btn.setText("播放中")
             self.status_label.setText(
                 f"系统状态: 正在播放: {os.path.basename(self.current_music)}"
             )
-            # 高亮显示当前播放的音乐
             self.music_list_widget.setCurrentRow(self.current_index)
         except pygame.error as e:
             self.status_label.setText(f"系统状态: 播放失败: {str(e)}")
             QMessageBox.warning(self, "播放错误", f"无法播放音乐: {str(e)}")
 
     def pause_music(self):
+        """暂停音乐并记录播放位置"""
         if not self.music_files:
             return
 
         if self.is_playing:
+            # 获取当前播放位置（毫秒 → 转换为秒）
+            self.paused_position = pygame.mixer.music.get_pos() / 1000
             pygame.mixer.music.pause()
             self.is_playing = False
             self.play_btn.setText("播放")
@@ -328,17 +324,14 @@ class MusicPlayer(QMainWindow):
                 f"系统状态: 已暂停: {os.path.basename(self.current_music)}"
             )
         else:
-            pygame.mixer.music.unpause()
-            self.is_playing = True
-            self.play_btn.setText("播放中")
-            self.status_label.setText(
-                f"系统状态: 继续播放: {os.path.basename(self.current_music)}"
-            )
+            self.play_music()  # 继续播放时调用play_music（从暂停位置恢复）
 
     def next_music(self):
+        """切换下一首音乐"""
         if not self.music_files:
             return
 
+        self.paused_position = 0  # 切换歌曲时重置暂停位置
         if self.current_index < len(self.music_files) - 1:
             self.current_index += 1
         else:
@@ -354,6 +347,7 @@ class MusicPlayer(QMainWindow):
             self.music_list_widget.setCurrentRow(self.current_index)
 
     def init_gesture_thread(self):
+        """初始化手势识别线程"""
         self.gesture_thread = GestureRecognitionThread()
         self.gesture_thread.image_signal.connect(self.update_video)
         self.gesture_thread.gesture_signal.connect(self.handle_gesture)
@@ -362,6 +356,7 @@ class MusicPlayer(QMainWindow):
         self.status_label.setText("系统状态: 正在初始化MediaPipe手势识别...")
 
     def update_video(self, original_frame, processed_frame):
+        """更新视频显示"""
         try:
             rgb_original = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
             h, w, c = rgb_original.shape
@@ -389,28 +384,30 @@ class MusicPlayer(QMainWindow):
             self.update_status(f"视频更新错误: {str(e)}")
 
     def handle_gesture(self, gesture):
+        """处理手势控制逻辑"""
         self.gesture_label.setText(f"手势识别结果：{gesture}")
         self.status_label.setText(f"系统状态: 识别到手势 - {gesture}")
 
-        # 核心修复：同一手势在冷却期间不重复处理
         if gesture == self.last_handled_gesture:
-            return  # 忽略重复的同一手势
+            return  # 忽略重复手势
 
-        # 处理手势并记录
+        # 手势与操作映射
         if gesture == "拳头" and not self.is_playing:
             self.play_music()
             self.last_handled_gesture = gesture
         elif gesture == "掌心":
-            self.pause_music()  # pause_music内部已处理播放/暂停切换
+            self.pause_music()
             self.last_handled_gesture = gesture
         elif gesture == "OK 手势":
             self.next_music()
             self.last_handled_gesture = gesture
 
     def update_status(self, message):
+        """更新系统状态显示"""
         self.status_label.setText(f"系统状态: {message}")
 
     def closeEvent(self, event):
+        """程序关闭时释放资源"""
         if hasattr(self, "gesture_thread") and self.gesture_thread.isRunning():
             self.gesture_thread.stop()
             self.gesture_thread.wait(5000)
