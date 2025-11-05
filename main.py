@@ -41,7 +41,6 @@ class GestureRecognitionThread(QThread):
         self.prev_gesture = None
         self.gesture_count = 0
         self.gesture_cooldown = 0
-        self.cooldown_frames = 15
         print("手势识别线程已初始化")
 
     def run(self):
@@ -64,17 +63,39 @@ class GestureRecognitionThread(QThread):
                 processed_frame, gesture = self.process_and_recognize(frame)
                 self.image_signal.emit(frame, processed_frame)
 
-                if gesture and self.gesture_cooldown == 0:
-                    if gesture == self.prev_gesture:
-                        self.gesture_count += 1
-                        if self.gesture_count >= 3:
+                # 只有冷却期为0时才处理新手势
+                if self.gesture_cooldown == 0:
+                    if gesture:
+                        if gesture == self.prev_gesture:
+                            self.gesture_count += 1
+                        else:
+                            self.prev_gesture = gesture
+                            self.gesture_count = 1
+
+                        # 根据不同手势设置不同的触发阈值
+                        required_frames = 3  # 默认需要3帧
+                        if gesture == "V字手势":
+                            required_frames = 2  # V字手势只需要2帧，响应更快
+
+                        if self.gesture_count >= required_frames:
                             self.gesture_signal.emit(gesture)
-                            self.prev_gesture = None
-                            self.gesture_count = 0
-                            self.gesture_cooldown = self.cooldown_frames
+
+                            # 根据不同手势设置不同的冷却时间
+                            if gesture == "V字手势":
+                                self.gesture_cooldown = (
+                                    20  # V字手势冷却5帧，便于快速切换
+                                )
+                            elif gesture == "拳头":
+                                self.gesture_cooldown = 10
+                            else:  # 掌心
+                                self.gesture_cooldown = 12
+
+                            # 重要：不重置prev_gesture，允许连续识别相同手势
+                            self.gesture_count = 0  # 只重置计数，不重置手势状态
                     else:
-                        self.prev_gesture = gesture
-                        self.gesture_count = 1
+                        # 没有检测到手势时，重置状态
+                        self.prev_gesture = None
+                        self.gesture_count = 0
 
                 time.sleep(0.05)
 
@@ -97,16 +118,6 @@ class GestureRecognitionThread(QThread):
                     processed_frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS
                 )
                 gesture = self.recognize_gesture(hand_landmarks.landmark)
-                # 可视化手势名称（调试用）
-                cv2.putText(
-                    processed_frame,
-                    gesture or "未知",
-                    (20, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 0),
-                    2,
-                )
                 return processed_frame, gesture
 
         return processed_frame, None
@@ -232,9 +243,9 @@ class MusicPlayer(QMainWindow):
     def auto_load_music(self):
         """启动时自动从默认路径加载音乐"""
         default_folders = [
-            "music",  # 当前目录下的music文件夹（可修改为常用音乐路径）
-            os.path.expanduser("~/Music"),  # 用户音乐文件夹（macOS/Linux）
-            os.path.expanduser("~/Downloads"),  # 下载文件夹
+            "music",  # 当前目录下的music文件夹
+            # os.path.expanduser("~/Music"),  # 用户音乐文件夹（macOS/Linux）
+            # os.path.expanduser("~/Downloads"),  # 下载文件夹
         ]
 
         for folder in default_folders:
@@ -396,21 +407,21 @@ class MusicPlayer(QMainWindow):
             self.update_status(f"视频更新错误: {str(e)}")
 
     def handle_gesture(self, gesture):
-        """处理手势控制逻辑"""
         self.gesture_label.setText(f"手势识别结果：{gesture}")
         self.status_label.setText(f"系统状态: 识别到手势 - {gesture}")
 
-        if gesture == self.last_handled_gesture:
-            return  # 忽略重复手势
+        # 只对非V字手势进行重复过滤，允许V字手势连续触发
+        if gesture != "V字手势" and gesture == self.last_handled_gesture:
+            return
 
-        # 手势与操作映射
+        # 手势与操作映射（不变）
         if gesture == "拳头":
             if not self.is_playing:
-                self.play_music()  # 拳头手势：继续播放（若暂停）
+                self.play_music()
         elif gesture == "掌心":
-            self.pause_music()  # 掌心手势：暂停
+            self.pause_music()
         elif gesture == "V字手势":
-            self.next_music()  # V字手势：下一首
+            self.next_music()
 
         self.last_handled_gesture = gesture
 
