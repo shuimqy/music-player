@@ -19,6 +19,7 @@ import numpy as np
 import os
 import time
 import mediapipe as mp
+import math  # 新增：用于计算手指间距离
 
 
 class GestureRecognitionThread(QThread):
@@ -72,26 +73,28 @@ class GestureRecognitionThread(QThread):
                             self.prev_gesture = gesture
                             self.gesture_count = 1
 
-                        # 根据不同手势设置不同的触发阈值
+                        # 根据不同手势设置不同的触发阈值（所需确认帧数）
                         required_frames = 3  # 默认需要3帧
                         if gesture == "V字手势":
-                            required_frames = 2  # V字手势只需要2帧，响应更快
+                            required_frames = 2  # V字手势只需要2帧
+                        elif gesture in ["音量加", "音量减"]:
+                            required_frames = 2  # 音量调节也需要响应快一点
 
                         if self.gesture_count >= required_frames:
                             self.gesture_signal.emit(gesture)
 
-                            # 根据不同手势设置不同的冷却时间
+                            # --- 修改点3：针对不同手势设置不同的冷却时间 ---
                             if gesture == "V字手势":
-                                self.gesture_cooldown = (
-                                    20  # V字手势冷却5帧，便于快速切换
-                                )
+                                self.gesture_cooldown = 20  # 切歌冷却长，防误触
                             elif gesture == "拳头":
                                 self.gesture_cooldown = 10
+                            elif gesture in ["音量加", "音量减"]:
+                                self.gesture_cooldown = 5  # 音量冷却短，方便连续调节
                             else:  # 掌心
                                 self.gesture_cooldown = 12
 
                             # 重要：不重置prev_gesture，允许连续识别相同手势
-                            self.gesture_count = 0  # 只重置计数，不重置手势状态
+                            self.gesture_count = 0  # 只重置计数
                     else:
                         # 没有检测到手势时，重置状态
                         self.prev_gesture = None
@@ -122,6 +125,10 @@ class GestureRecognitionThread(QThread):
 
         return processed_frame, None
 
+    # 新增：计算两点距离
+    def calculate_distance(self, p1, p2):
+        return math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2)
+
     def recognize_gesture(self, landmarks):
         thumb_tip = landmarks[4]
         index_tip = landmarks[8]
@@ -149,13 +156,28 @@ class GestureRecognitionThread(QThread):
         ring_bend = not ring_up
         pinky_bend = not pinky_up
 
+        # --- 修改点1：新增音量手势判断 ---
+
+        # 1. 音量加 (OK手势)：大拇指和食指尖距离很近，且其他三指伸直
+        pinch_distance = self.calculate_distance(thumb_tip, index_tip)
+        if pinch_distance < 0.05 and middle_up and ring_up and pinky_up:
+            return "音量加"
+
+        # 2. 音量减 ("六"手势/电话手势)：大拇指和小指伸直，中间三指弯曲
+        if thumb_up and pinky_up and index_bend and middle_bend and ring_bend:
+            return "音量减"
+
+        # --- 原有手势判断 ---
+
         # 拳头：所有手指弯曲
         if thumb_bend and index_bend and middle_bend and ring_bend and pinky_bend:
             return "拳头"
 
         # 掌心：所有手指伸直
+        # 增加判断：如果已经是pinch状态(距离很近)，就不判定为掌心，避免OK手势误判
         if thumb_up and index_up and middle_up and ring_up and pinky_up:
-            return "掌心"
+            if pinch_distance > 0.05:
+                return "掌心"
 
         # V字手势：食指、中指伸直，其他弯曲
         if index_up and middle_up and thumb_bend and ring_bend and pinky_bend:
@@ -229,6 +251,9 @@ class MusicPlayer(QMainWindow):
     def init_music(self):
         try:
             pygame.mixer.init()
+            # 修改点2：初始化音量
+            self.current_volume = 0.5  # 默认50%音量
+            pygame.mixer.music.set_volume(self.current_volume)
             self.status_label.setText("系统状态: 音频系统初始化成功")
         except pygame.error as e:
             self.status_label.setText(f"系统状态: 音频初始化失败: {str(e)}")
@@ -244,8 +269,6 @@ class MusicPlayer(QMainWindow):
         """启动时自动从默认路径加载音乐"""
         default_folders = [
             "music",  # 当前目录下的music文件夹
-            # os.path.expanduser("~/Music"),  # 用户音乐文件夹（macOS/Linux）
-            # os.path.expanduser("~/Downloads"),  # 下载文件夹
         ]
 
         for folder in default_folders:
@@ -318,6 +341,9 @@ class MusicPlayer(QMainWindow):
 
         try:
             pygame.mixer.music.load(self.current_music)
+            # 确保播放时音量正确
+            pygame.mixer.music.set_volume(self.current_volume)
+
             if self.paused_position > 0:  # 从暂停位置继续
                 pygame.mixer.music.play(start=self.paused_position)
             else:  # 从头播放
@@ -369,6 +395,24 @@ class MusicPlayer(QMainWindow):
             )
             self.music_list_widget.setCurrentRow(self.current_index)
 
+    # 修改点2：新增调节音量的函数
+    def change_volume(self, change):
+        # 计算新音量，限制在 0.0 到 1.0 之间
+        new_volume = self.current_volume + change
+        new_volume = max(0.0, min(1.0, new_volume))
+
+        # 只有音量确实改变时才更新
+        if new_volume != self.current_volume:
+            self.current_volume = new_volume
+            pygame.mixer.music.set_volume(self.current_volume)
+
+            # 格式化显示百分比
+            vol_percent = int(self.current_volume * 100)
+            self.status_label.setText(f"系统状态: 音量调节至 {vol_percent}%")
+
+            if self.current_volume == 0:
+                self.status_label.setText(f"系统状态: 已静音")
+
     def init_gesture_thread(self):
         """初始化手势识别线程"""
         self.gesture_thread = GestureRecognitionThread()
@@ -410,11 +454,12 @@ class MusicPlayer(QMainWindow):
         self.gesture_label.setText(f"手势识别结果：{gesture}")
         self.status_label.setText(f"系统状态: 识别到手势 - {gesture}")
 
-        # 只对非V字手势进行重复过滤，允许V字手势连续触发
-        if gesture != "V字手势" and gesture == self.last_handled_gesture:
+        # V字手势和音量手势允许连续触发，其他手势需要松开
+        allow_repeat = gesture in ["V字手势", "音量加", "音量减"]
+        if not allow_repeat and gesture == self.last_handled_gesture:
             return
 
-        # 手势与操作映射（不变）
+        # 手势与操作映射
         if gesture == "拳头":
             if not self.is_playing:
                 self.play_music()
@@ -422,6 +467,11 @@ class MusicPlayer(QMainWindow):
             self.pause_music()
         elif gesture == "V字手势":
             self.next_music()
+        # 修改点2：关联音量手势
+        elif gesture == "音量加":
+            self.change_volume(0.1)  # +10%
+        elif gesture == "音量减":
+            self.change_volume(-0.1)  # -10%
 
         self.last_handled_gesture = gesture
 
