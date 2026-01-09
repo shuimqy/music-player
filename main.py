@@ -6,9 +6,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QWidget,
-    QFileDialog,
-    QMessageBox,
     QListWidget,
+    QProgressBar,
+    QFrame,
+    QStyle,
+    QGroupBox,
 )
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtCore import Qt, QThread, Signal
@@ -19,7 +21,84 @@ import numpy as np
 import os
 import time
 import mediapipe as mp
-import math  # 新增：用于计算手指间距离
+import math
+
+# 导入设置模块
+from settings import SettingsWindow, ConfigManager
+
+# --- 样式表 (Dark Tech Theme) ---
+STYLESHEET = """
+QMainWindow {
+    background-color: #1e1e1e;
+    color: #f0f0f0;
+}
+QGroupBox {
+    border: 2px solid #333;
+    border-radius: 8px;
+    margin-top: 10px;
+    font-weight: bold;
+    color: #00bcd4; 
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 5px;
+}
+QLabel {
+    color: #e0e0e0;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 14px;
+}
+QListWidget {
+    background-color: #252526;
+    border: 1px solid #333;
+    border-radius: 5px;
+    color: #cccccc;
+    font-size: 13px;
+    padding: 5px;
+}
+QListWidget::item {
+    height: 30px;
+    padding: 5px;
+}
+QListWidget::item:selected {
+    background-color: #00bcd4;
+    color: #000000;
+    border-radius: 3px;
+}
+QListWidget::item:hover {
+    background-color: #333;
+}
+QPushButton {
+    background-color: #333333;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: white;
+    padding: 8px 15px;
+    font-weight: bold;
+    min-height: 20px;
+}
+QPushButton:hover {
+    background-color: #444444;
+    border-color: #00bcd4;
+}
+QPushButton:pressed {
+    background-color: #00bcd4;
+    color: black;
+}
+QProgressBar {
+    border: 1px solid #444;
+    border-radius: 5px;
+    background-color: #252526;
+    text-align: center;
+    color: white;
+    font-weight: bold;
+}
+QProgressBar::chunk {
+    background-color: #00bcd4;
+    border-radius: 4px;
+}
+"""
 
 
 class GestureRecognitionThread(QThread):
@@ -42,20 +121,18 @@ class GestureRecognitionThread(QThread):
         self.prev_gesture = None
         self.gesture_count = 0
         self.gesture_cooldown = 0
-        print("手势识别线程已初始化")
 
     def run(self):
         try:
             self.cap = cv2.VideoCapture(0)
             if not self.cap.isOpened():
-                self.error_signal.emit("无法打开摄像头，请检查设备")
+                self.error_signal.emit("无法打开摄像头")
                 return
 
-            self.error_signal.emit("摄像头打开成功，开始手势检测")
+            self.error_signal.emit("系统就绪 - 等待手势")
             while self.running:
                 ret, frame = self.cap.read()
                 if not ret:
-                    self.error_signal.emit("无法获取摄像头帧数据")
                     break
 
                 if self.gesture_cooldown > 0:
@@ -64,7 +141,6 @@ class GestureRecognitionThread(QThread):
                 processed_frame, gesture = self.process_and_recognize(frame)
                 self.image_signal.emit(frame, processed_frame)
 
-                # 只有冷却期为0时才处理新手势
                 if self.gesture_cooldown == 0:
                     if gesture:
                         if gesture == self.prev_gesture:
@@ -73,36 +149,31 @@ class GestureRecognitionThread(QThread):
                             self.prev_gesture = gesture
                             self.gesture_count = 1
 
-                        # 根据不同手势设置不同的触发阈值（所需确认帧数）
-                        required_frames = 3  # 默认需要3帧
-                        if gesture == "V字手势":
-                            required_frames = 2  # V字手势只需要2帧
-                        elif gesture in ["音量加", "音量减"]:
-                            required_frames = 2  # 音量调节也需要响应快一点
+                        required_frames = 3
+                        # 为快速反应的手势降低帧数要求
+                        if gesture == "V字手势" or gesture in ["音量加", "音量减"]:
+                            required_frames = 2
 
                         if self.gesture_count >= required_frames:
                             self.gesture_signal.emit(gesture)
 
-                            # --- 修改点3：针对不同手势设置不同的冷却时间 ---
+                            # 独立冷却时间
                             if gesture == "V字手势":
-                                self.gesture_cooldown = 20  # 切歌冷却长，防误触
+                                self.gesture_cooldown = 20
                             elif gesture == "拳头":
                                 self.gesture_cooldown = 10
                             elif gesture in ["音量加", "音量减"]:
-                                self.gesture_cooldown = 5  # 音量冷却短，方便连续调节
-                            else:  # 掌心
+                                self.gesture_cooldown = 5
+                            else:
                                 self.gesture_cooldown = 12
 
-                            # 重要：不重置prev_gesture，允许连续识别相同手势
-                            self.gesture_count = 0  # 只重置计数
+                            self.gesture_count = 0
                     else:
-                        # 没有检测到手势时，重置状态
                         self.prev_gesture = None
                         self.gesture_count = 0
 
-                time.sleep(0.05)
+                time.sleep(0.04)
 
-            self.error_signal.emit("手势识别线程正常结束")
         except Exception as e:
             self.error_signal.emit(f"线程错误: {str(e)}")
         finally:
@@ -125,7 +196,6 @@ class GestureRecognitionThread(QThread):
 
         return processed_frame, None
 
-    # 新增：计算两点距离
     def calculate_distance(self, p1, p2):
         return math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2)
 
@@ -142,44 +212,32 @@ class GestureRecognitionThread(QThread):
         ring_pip = landmarks[14].y
         pinky_pip = landmarks[18].y
 
-        # 手指伸直判断（阈值调整为0.015，减少误判）
         thumb_up = thumb_tip.y < thumb_ip - 0.015
         index_up = index_tip.y < index_pip - 0.015
         middle_up = middle_tip.y < middle_pip - 0.015
         ring_up = ring_tip.y < ring_pip - 0.015
         pinky_up = pinky_tip.y < pinky_pip - 0.015
 
-        # 手指弯曲判断
         thumb_bend = not thumb_up
         index_bend = not index_up
         middle_bend = not middle_up
         ring_bend = not ring_up
         pinky_bend = not pinky_up
 
-        # --- 修改点1：新增音量手势判断 ---
-
-        # 1. 音量加 (OK手势)：大拇指和食指尖距离很近，且其他三指伸直
         pinch_distance = self.calculate_distance(thumb_tip, index_tip)
         if pinch_distance < 0.05 and middle_up and ring_up and pinky_up:
             return "音量加"
 
-        # 2. 音量减 ("六"手势/电话手势)：大拇指和小指伸直，中间三指弯曲
         if thumb_up and pinky_up and index_bend and middle_bend and ring_bend:
             return "音量减"
 
-        # --- 原有手势判断 ---
-
-        # 拳头：所有手指弯曲
         if thumb_bend and index_bend and middle_bend and ring_bend and pinky_bend:
             return "拳头"
 
-        # 掌心：所有手指伸直
-        # 增加判断：如果已经是pinch状态(距离很近)，就不判定为掌心，避免OK手势误判
         if thumb_up and index_up and middle_up and ring_up and pinky_up:
             if pinch_distance > 0.05:
                 return "掌心"
 
-        # V字手势：食指、中指伸直，其他弯曲
         if index_up and middle_up and thumb_bend and ring_bend and pinky_bend:
             return "V字手势"
 
@@ -187,114 +245,167 @@ class GestureRecognitionThread(QThread):
 
     def stop(self):
         self.running = False
-        print("手势识别线程已停止")
 
 
 class MusicPlayer(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setStyleSheet(STYLESHEET)
+
+        # 加载配置
+        self.config = ConfigManager.load_config()
+        self.settings_window = None  # 延迟初始化
+
         self.init_ui()
         self.init_music()
         self.init_gesture_thread()
         self.last_handled_gesture = None
-        self.auto_load_music()  # 启动时自动加载音乐
+
+        # 启动时根据配置加载音乐
+        self.load_music_from_config()
 
     def init_ui(self):
-        self.setWindowTitle("MediaPipe手势控制音乐播放器")
-        self.setGeometry(100, 100, 1000, 700)
+        self.setWindowTitle("智能手势音乐播放器 V2.1")
+        self.resize(1100, 750)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
 
-        # 视频显示区域
-        video_layout = QHBoxLayout()
-        self.original_video = QLabel("原始视频")
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+
+        # --- 左侧区域 ---
+        left_container = QWidget()
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        # 视频区域
+        video_group = QGroupBox(" 手势识别窗口 ")
+        video_layout = QHBoxLayout(video_group)
+        self.original_video = QLabel()
         self.original_video.setAlignment(Qt.AlignCenter)
-        self.original_video.setMinimumSize(400, 400)
-        video_layout.addWidget(self.original_video)
-
-        self.processed_video = QLabel("检测结果（带关键点）")
+        self.original_video.setStyleSheet(
+            "background-color: black; border-radius: 4px;"
+        )
+        self.original_video.setMinimumSize(320, 240)
+        self.processed_video = QLabel()
         self.processed_video.setAlignment(Qt.AlignCenter)
-        self.processed_video.setMinimumSize(400, 400)
+        self.processed_video.setStyleSheet(
+            "background-color: black; border-radius: 4px;"
+        )
+        self.processed_video.setMinimumSize(320, 240)
+        video_layout.addWidget(self.original_video)
         video_layout.addWidget(self.processed_video)
-        layout.addLayout(video_layout)
+        left_layout.addWidget(video_group, stretch=3)
 
-        # 状态与手势显示
-        self.status_label = QLabel("系统状态: 初始化中...")
-        layout.addWidget(self.status_label)
-        self.gesture_label = QLabel("手势识别结果：等待识别...")
-        layout.addWidget(self.gesture_label)
+        # 状态区域
+        info_group = QGroupBox(" 系统状态 ")
+        info_layout = QVBoxLayout(info_group)
+        self.status_label = QLabel("正在初始化系统...")
+        self.status_label.setStyleSheet(
+            "font-size: 16px; color: #00bcd4; font-weight: bold;"
+        )
+        self.gesture_label = QLabel("当前手势: 无")
+        self.gesture_label.setStyleSheet("font-size: 18px; color: white;")
+        info_layout.addWidget(self.status_label)
+        info_layout.addWidget(self.gesture_label)
+        left_layout.addWidget(info_group, stretch=1)
 
-        # 音乐列表
-        self.music_list_widget = QListWidget()
-        self.music_list_widget.itemClicked.connect(self.select_music)
-        layout.addWidget(QLabel("音乐列表:"))
-        layout.addWidget(self.music_list_widget)
+        # 控制栏
+        control_group = QFrame()
+        control_group.setStyleSheet("background-color: #2b2b2b; border-radius: 10px;")
+        control_layout = QHBoxLayout(control_group)
 
-        # 控制按钮
-        control_layout = QHBoxLayout()
-        self.load_btn = QPushButton("加载音乐文件夹")
-        self.load_btn.clicked.connect(self.load_music_folder)
-        self.play_btn = QPushButton("播放")
+        # 按钮：设置 (替代了原来的加载文件夹)
+        self.settings_btn = QPushButton("系统设置")
+        self.settings_btn.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+        self.settings_btn.setToolTip("打开设置面板")
+        self.settings_btn.clicked.connect(self.open_settings)
+
+        self.play_btn = QPushButton()
+        self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.play_btn.clicked.connect(self.play_music)
-        self.pause_btn = QPushButton("暂停")
+
+        self.pause_btn = QPushButton()
+        self.pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
         self.pause_btn.clicked.connect(self.pause_music)
-        self.next_btn = QPushButton("下一首")
+
+        self.next_btn = QPushButton()
+        self.next_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaSkipForward))
         self.next_btn.clicked.connect(self.next_music)
-        control_layout.addWidget(self.load_btn)
+
+        control_layout.addWidget(self.settings_btn)  # 新的设置按钮
+        control_layout.addSpacing(20)
         control_layout.addWidget(self.play_btn)
         control_layout.addWidget(self.pause_btn)
         control_layout.addWidget(self.next_btn)
-        layout.addLayout(control_layout)
+
+        control_layout.addSpacing(30)
+        control_layout.addWidget(QLabel("音量"))
+        self.volume_bar = QProgressBar()
+        self.volume_bar.setRange(0, 100)
+        self.volume_bar.setValue(50)
+        self.volume_bar.setTextVisible(True)
+        self.volume_bar.setFixedWidth(150)
+        control_layout.addWidget(self.volume_bar)
+
+        left_layout.addWidget(control_group)
+
+        # --- 右侧播放列表 ---
+        right_container = QGroupBox(" 播放列表 ")
+        right_layout = QVBoxLayout(right_container)
+        self.music_list_widget = QListWidget()
+        self.music_list_widget.itemClicked.connect(self.select_music)
+        self.music_list_widget.setFrameShape(QFrame.NoFrame)
+        right_layout.addWidget(self.music_list_widget)
+
+        main_layout.addWidget(left_container, stretch=7)
+        main_layout.addWidget(right_container, stretch=3)
 
     def init_music(self):
         try:
             pygame.mixer.init()
-            # 修改点2：初始化音量
-            self.current_volume = 0.5  # 默认50%音量
+            self.current_volume = 0.5
             pygame.mixer.music.set_volume(self.current_volume)
-            self.status_label.setText("系统状态: 音频系统初始化成功")
+            self.status_label.setText("AUDIO SYSTEM: ONLINE")
+            self.volume_bar.setValue(50)
         except pygame.error as e:
-            self.status_label.setText(f"系统状态: 音频初始化失败: {str(e)}")
-            QMessageBox.warning(self, "音频错误", f"无法初始化音频系统: {str(e)}")
+            self.status_label.setText(f"ERROR: {str(e)}")
 
         self.current_music = ""
         self.is_playing = False
         self.music_files = []
         self.current_index = -1
-        self.paused_position = 0  # 记录暂停时的播放位置（单位：秒）
+        self.paused_position = 0
 
-    def auto_load_music(self):
-        """启动时自动从默认路径加载音乐"""
-        default_folders = [
-            "music",  # 当前目录下的music文件夹
-        ]
+    def open_settings(self):
+        """打开设置窗口"""
+        if self.settings_window is None:
+            self.settings_window = SettingsWindow()
+            self.settings_window.config_saved.connect(self.on_config_updated)
 
-        for folder in default_folders:
-            if os.path.exists(folder):
-                self.load_music_from_folder(folder)
-                if self.music_files:
-                    break
+        # 每次打开都刷新一下配置显示（万一文件被外部改了）
+        self.settings_window.show()
+        self.settings_window.raise_()  # 窗口置顶
 
-        if not self.music_files:
-            self.status_label.setText("系统状态: 未找到音乐文件，请手动加载")
+    def on_config_updated(self, new_config):
+        """当设置窗口保存配置后的回调"""
+        self.config = new_config
+        self.load_music_from_config()
+        self.status_label.setText("系统设置已更新")
+
+    def load_music_from_config(self):
+        """从配置中读取路径并加载"""
+        folder = self.config.get("music_folder", "")
+        if folder and os.path.exists(folder):
+            self.load_music_from_folder(folder)
         else:
-            self.status_label.setText(
-                f"系统状态: 已自动加载 {len(self.music_files)} 首音乐"
-            )
-
-    def load_music_folder(self):
-        """手动选择文件夹加载音乐"""
-        folder_path = QFileDialog.getExistingDirectory(self, "选择音乐文件夹")
-        if folder_path:
-            self.load_music_from_folder(folder_path)
+            self.status_label.setText("请点击[系统设置]选择音乐文件夹")
 
     def load_music_from_folder(self, folder_path):
-        """从指定文件夹扫描并加载音乐文件"""
         supported_formats = (".mp3", ".wav", ".ogg", ".flac", ".m4a")
         music_files = []
-
         for root, _, files in os.walk(folder_path):
             for file in files:
                 if file.lower().endswith(supported_formats):
@@ -303,187 +414,143 @@ class MusicPlayer(QMainWindow):
         if music_files:
             self.music_files = music_files
             self.update_music_list()
-            self.current_index = 0  # 自动选中第一首
+            self.current_index = 0
+            self.status_label.setText(f"已加载: {len(music_files)} 首曲目")
             self.play_btn.setEnabled(True)
-            self.status_label.setText(f"系统状态: 已加载 {len(music_files)} 首音乐")
         else:
-            self.status_label.setText(f"系统状态: 在 {folder_path} 中未找到音乐文件")
+            self.status_label.setText("该文件夹未发现音乐文件")
 
     def update_music_list(self):
-        """更新音乐列表UI显示"""
         self.music_list_widget.clear()
         for file in self.music_files:
-            self.music_list_widget.addItem(os.path.basename(file))
+            item = os.path.basename(file)
+            self.music_list_widget.addItem(item)
+            self.music_list_widget.item(self.music_list_widget.count() - 1).setIcon(
+                self.style().standardIcon(QStyle.SP_MediaVolume)
+            )
 
     def select_music(self, item):
-        """从列表中选择音乐并切换"""
         index = self.music_list_widget.row(item)
         if 0 <= index < len(self.music_files):
             self.current_index = index
             self.current_music = self.music_files[index]
-            self.paused_position = 0  # 切换音乐时重置暂停位置
-            self.status_label.setText(
-                f"系统状态: 已选择: {os.path.basename(self.current_music)}"
-            )
+            self.paused_position = 0
             if self.is_playing:
-                self.play_music()  # 若正在播放，立即切换
+                self.play_music()
 
     def play_music(self):
-        """播放/继续播放音乐（支持从暂停位置恢复）"""
         if not self.music_files:
-            QMessageBox.information(self, "提示", "请先加载音乐文件")
             return
-
-        # 自动选中第一首（若未选择）
-        if self.current_index == -1 and self.music_files:
+        if self.current_index == -1:
             self.current_index = 0
             self.current_music = self.music_files[0]
-
         try:
             pygame.mixer.music.load(self.current_music)
-            # 确保播放时音量正确
             pygame.mixer.music.set_volume(self.current_volume)
-
-            if self.paused_position > 0:  # 从暂停位置继续
+            if self.paused_position > 0:
                 pygame.mixer.music.play(start=self.paused_position)
-            else:  # 从头播放
+            else:
                 pygame.mixer.music.play()
             self.is_playing = True
-            self.play_btn.setText("播放中")
             self.status_label.setText(
-                f"系统状态: 正在播放: {os.path.basename(self.current_music)}"
+                f"正在播放: {os.path.basename(self.current_music)}"
             )
             self.music_list_widget.setCurrentRow(self.current_index)
         except pygame.error as e:
-            self.status_label.setText(f"系统状态: 播放失败: {str(e)}")
-            QMessageBox.warning(self, "播放错误", f"无法播放音乐: {str(e)}")
+            self.status_label.setText(f"ERROR: {str(e)}")
 
     def pause_music(self):
-        """暂停音乐并记录播放位置"""
         if not self.music_files:
             return
-
         if self.is_playing:
-            # 获取当前播放位置（毫秒 → 转换为秒）
             self.paused_position = pygame.mixer.music.get_pos() / 1000
             pygame.mixer.music.pause()
             self.is_playing = False
-            self.play_btn.setText("播放")
-            self.status_label.setText(
-                f"系统状态: 已暂停: {os.path.basename(self.current_music)}"
-            )
+            self.status_label.setText("已暂停")
         else:
-            self.play_music()  # 继续播放时调用play_music（从暂停位置恢复）
+            self.play_music()
 
     def next_music(self):
-        """切换下一首音乐"""
         if not self.music_files:
             return
-
-        self.paused_position = 0  # 切换歌曲时重置暂停位置
+        self.paused_position = 0
         if self.current_index < len(self.music_files) - 1:
             self.current_index += 1
         else:
-            self.current_index = 0  # 循环播放
-
+            self.current_index = 0
         self.current_music = self.music_files[self.current_index]
-        if self.is_playing:
-            self.play_music()
-        else:
-            self.status_label.setText(
-                f"系统状态: 已选择下一首: {os.path.basename(self.current_music)}"
-            )
-            self.music_list_widget.setCurrentRow(self.current_index)
+        self.play_music()
 
-    # 修改点2：新增调节音量的函数
     def change_volume(self, change):
-        # 计算新音量，限制在 0.0 到 1.0 之间
         new_volume = self.current_volume + change
         new_volume = max(0.0, min(1.0, new_volume))
-
-        # 只有音量确实改变时才更新
         if new_volume != self.current_volume:
             self.current_volume = new_volume
             pygame.mixer.music.set_volume(self.current_volume)
-
-            # 格式化显示百分比
             vol_percent = int(self.current_volume * 100)
-            self.status_label.setText(f"系统状态: 音量调节至 {vol_percent}%")
-
-            if self.current_volume == 0:
-                self.status_label.setText(f"系统状态: 已静音")
+            self.volume_bar.setValue(vol_percent)
+            self.status_label.setText(f"音量调节: {vol_percent}%")
 
     def init_gesture_thread(self):
-        """初始化手势识别线程"""
         self.gesture_thread = GestureRecognitionThread()
         self.gesture_thread.image_signal.connect(self.update_video)
         self.gesture_thread.gesture_signal.connect(self.handle_gesture)
         self.gesture_thread.error_signal.connect(self.update_status)
         self.gesture_thread.start()
-        self.status_label.setText("系统状态: 正在初始化MediaPipe手势识别...")
 
     def update_video(self, original_frame, processed_frame):
-        """更新视频显示"""
-        try:
-            rgb_original = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
-            h, w, c = rgb_original.shape
-            q_original = QImage(rgb_original.data, w, h, w * c, QImage.Format_RGB888)
-            self.original_video.setPixmap(
-                QPixmap.fromImage(q_original).scaled(
-                    self.original_video.width(),
-                    self.original_video.height(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
+        def set_frame(frame, label):
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, c = rgb.shape
+            qimg = QImage(rgb.data, w, h, w * c, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimg)
+            scaled_pixmap = pixmap.scaled(
+                label.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
             )
+            label.setPixmap(scaled_pixmap)
 
-            rgb_processed = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
-            q_processed = QImage(rgb_processed.data, w, h, w * c, QImage.Format_RGB888)
-            self.processed_video.setPixmap(
-                QPixmap.fromImage(q_processed).scaled(
-                    self.processed_video.width(),
-                    self.processed_video.height(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
-        except Exception as e:
-            self.update_status(f"视频更新错误: {str(e)}")
+        set_frame(original_frame, self.original_video)
+        set_frame(processed_frame, self.processed_video)
 
     def handle_gesture(self, gesture):
-        self.gesture_label.setText(f"手势识别结果：{gesture}")
-        self.status_label.setText(f"系统状态: 识别到手势 - {gesture}")
+        self.gesture_label.setText(f"DETECTED: {gesture}")
+        self.gesture_label.setStyleSheet(
+            "font-size: 24px; color: #00bcd4; font-weight: bold;"
+        )
 
-        # V字手势和音量手势允许连续触发，其他手势需要松开
         allow_repeat = gesture in ["V字手势", "音量加", "音量减"]
         if not allow_repeat and gesture == self.last_handled_gesture:
             return
 
-        # 手势与操作映射
-        if gesture == "拳头":
+        # --- 核心修改：使用配置文件中的映射来决定执行什么操作 ---
+        gesture_map = self.config.get("gestures", {})
+        action = gesture_map.get(gesture, "none")
+
+        if action == "play":
             if not self.is_playing:
                 self.play_music()
-        elif gesture == "掌心":
+        elif action == "pause":
             self.pause_music()
-        elif gesture == "V字手势":
+        elif action == "next":
             self.next_music()
-        # 修改点2：关联音量手势
-        elif gesture == "音量加":
-            self.change_volume(0.1)  # +10%
-        elif gesture == "音量减":
-            self.change_volume(-0.1)  # -10%
+        elif action == "vol_up":
+            self.change_volume(0.05)
+        elif action == "vol_down":
+            self.change_volume(-0.05)
+        elif action == "none":
+            pass  # 用户设置了无操作
 
         self.last_handled_gesture = gesture
 
     def update_status(self, message):
-        """更新系统状态显示"""
-        self.status_label.setText(f"系统状态: {message}")
+        self.status_label.setText(message)
 
     def closeEvent(self, event):
-        """程序关闭时释放资源"""
-        if hasattr(self, "gesture_thread") and self.gesture_thread.isRunning():
+        if hasattr(self, "gesture_thread"):
             self.gesture_thread.stop()
-            self.gesture_thread.wait(5000)
+            self.gesture_thread.wait(2000)
         pygame.mixer.quit()
         event.accept()
 

@@ -1,0 +1,10 @@
+{
+    "music_folder": "D:/Senior-work/music1",
+    "gestures": {
+        "拳头": "pause",
+        "掌心": "play",
+        "V字手势": "next",
+        "音量加": "vol_up",
+        "音量减": "vol_down"
+    }
+}
