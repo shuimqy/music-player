@@ -11,10 +11,9 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QFileDialog,
     QMessageBox,
-    QFrame,
     QLineEdit,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal, Qt
 
 # 默认配置
 DEFAULT_CONFIG = {

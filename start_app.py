@@ -1,5 +1,4 @@
 import sys
-import time
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -11,8 +10,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 
-# 尝试导入主程序
-# 注意：确保你的主程序文件名为 main.py，且类名为 MusicPlayer
+
 try:
     from main import MusicPlayer
 except ImportError:

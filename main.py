@@ -134,13 +134,13 @@ class GestureRecognitionThread(QThread):
                 ret, frame = self.cap.read()
                 if not ret:
                     break
-
+                # 冷却时间递减
                 if self.gesture_cooldown > 0:
                     self.gesture_cooldown -= 1
 
                 processed_frame, gesture = self.process_and_recognize(frame)
                 self.image_signal.emit(frame, processed_frame)
-
+                # 冷却时间结束后开始连续帧检测
                 if self.gesture_cooldown == 0:
                     if gesture:
                         if gesture == self.prev_gesture:
@@ -265,7 +265,7 @@ class MusicPlayer(QMainWindow):
         self.load_music_from_config()
 
     def init_ui(self):
-        self.setWindowTitle("智能手势音乐播放器 V2.1")
+        self.setWindowTitle("手势音乐播放器 V2.0")
         self.resize(1100, 750)
 
         central_widget = QWidget()
